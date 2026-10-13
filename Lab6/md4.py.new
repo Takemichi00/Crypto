@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""MD4 (RFC 1320) - urmare: se utilizeaza Pycryptodomex daca e disponibil,
+altfel se foloseste implementarea de mai jos."""
+
+import struct
+
+try:
+    from Cryptodome.Hash import MD4 as _MD4
+except ImportError:
+    _MD4 = None
+
+
+def _rol(x, n):
+    x &= 0xFFFFFFFF
+    return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
+
+
+def md4(msg: bytes) -> bytes:
+    if _MD4 is not None:
+        h = _MD4.new()
+        h.update(msg)
+        return h.digest()
+
+    ml = len(msg) * 8
+    msg += b"\x80"
+    while len(msg) % 64 != 56:
+        msg += b"\x00"
+    msg += struct.pack("<Q", ml & 0xFFFFFFFFFFFFFFFF)
+
+    a0, b0, c0, d0 = 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476
+
+    def F(x, y, z):
+        return (x & y) | (~x & z)
+
+    def G(x, y, z):
+        return (x & y) | (x & z) | (y & z)
+
+    def Hf(x, y, z):
+        return x ^ y ^ z
+
+    for i in range(0, len(msg), 64):
+        X = list(struct.unpack("<16I", msg[i:i + 64]))
+        A, B, C, D = a0, b0, c0, d0
+
+        # RFC 1320: [ABCD k s] => A = rol(A + F(B,C,D) + X[k], s);
+        # apoi registrele se rotesc stanga: A<-B<-C<-D<-A.
+        def step(a, b, c, d, func, x, s, K=0):
+            t = (a + func(b, c, d) + x + K) & 0xFFFFFFFF
+            return _rol(t, s)
+
+        # Round 1
+        r = [(0, 3), (1, 7), (2, 11), (3, 15)] * 4
+        regs = [A, B, C, D]
+        for j in range(16):
+            k, s = r[j]
+            regs[0] = step(regs[0], regs[1], regs[2], regs[3], F, X[k], s)
+            regs = [regs[3], regs[0], regs[1], regs[2]]  # rotate left
+        A, B, C, D = regs
+
+        # Round 2
+        idx2 = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15]
+        r2 = [(idx2[j], [3, 5, 9, 13][j % 4]) for j in range(16)]
+        regs = [A, B, C, D]
+        for j in range(16):
+            k, s = r2[j]
+            regs[0] = step(regs[0], regs[1], regs[2], regs[3], G, X[k], s,
+                           0x5A827999)
+            regs = [regs[3], regs[0], regs[1], regs[2]]
+        A, B, C, D = regs
+
+        # Round 3
+        idx3 = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
+        r3 = [(idx3[j], [3, 9, 11, 15][j % 4]) for j in range(16)]
+        regs = [A, B, C, D]
+        for j in range(16):
+            k, s = r3[j]
+            regs[0] = step(regs[0], regs[1], regs[2], regs[3], Hf, X[k], s,
+                           0x6ED9EBA1)
+            regs = [regs[3], regs[0], regs[1], regs[2]]
+        A, B, C, D = regs
+
+        a0 = (a0 + A) & 0xFFFFFFFF
+        b0 = (b0 + B) & 0xFFFFFFFF
+        c0 = (c0 + C) & 0xFFFFFFFF
+        d0 = (d0 + D) & 0xFFFFFFFF
+
+    return struct.pack("<4I", a0, b0, c0, d0)
+
+
+def ntlm_hash(text: str) -> bytes:
+    """NTLM = MD4 over UTF-16LE encoding of the string."""
+    return md4(text.encode("utf-16-le"))
+
+
+if __name__ == "__main__":
+    assert md4(b"").hex() == "31d6cfe0d16ae931b73c59d7e0c089c0"
+    assert md4(b"abc").hex() == "a448017aaf21d8525fc10ae87aa6729d"
+    assert md4(b"message digest").hex() == "9e107d9d372bb6826bd81d3542a419d6"
+    print("MD4 self-test OK (vectori RFC 1320)")

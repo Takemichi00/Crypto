@@ -1,0 +1,2 @@
+# Private keys must never be committed to the repository
+**/*.key.pem
